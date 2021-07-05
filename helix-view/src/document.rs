@@ -26,6 +26,7 @@ use helix_core::{
     DEFAULT_LINE_ENDING,
 };
 
+use crate::decorations::TextAnnotation;
 use crate::editor::RedrawHandle;
 use crate::{apply_transaction, DocumentId, Editor, View, ViewId};
 
@@ -135,6 +136,7 @@ pub struct Document {
     pub(crate) modified_since_accessed: bool,
 
     diagnostics: Vec<Diagnostic>,
+    text_annotations: Vec<TextAnnotation>,
     language_server: Option<Arc<helix_lsp::Client>>,
 
     diff_handle: Option<DiffHandle>,
@@ -369,6 +371,7 @@ impl Document {
             language: None,
             changes,
             old_state,
+            text_annotations: vec![],
             diagnostics: Vec::new(),
             version: 0,
             history: Cell::new(History::default()),
@@ -1134,6 +1137,22 @@ impl Document {
         self.relative_path()
             .map(|path| path.to_string_lossy().to_string().into())
             .unwrap_or_else(|| SCRATCH_BUFFER_NAME.into())
+    }
+
+    pub fn text_annotations(&self) -> &[TextAnnotation] {
+        &self.text_annotations
+    }
+
+    pub fn extend_text_annotations(&mut self, annots: Vec<TextAnnotation>) {
+        self.text_annotations.extend(annots)
+    }
+
+    /// Remove annotations that return true for the given predicate
+    pub fn remove_text_annotations<F>(&mut self, predicate: F)
+    where
+        F: Fn(&TextAnnotation) -> bool,
+    {
+        self.text_annotations.retain(|t| !predicate(t))
     }
 
     // transact(Fn) ?
