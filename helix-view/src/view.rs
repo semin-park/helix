@@ -167,23 +167,20 @@ impl View {
     //
     pub fn offset_coords_to_in_view(
         &self,
+        cursor: usize,
         doc: &Document,
         scrolloff: usize,
     ) -> Option<(usize, usize)> {
-        self.offset_coords_to_in_view_center(doc, scrolloff, false)
+        self.offset_coords_to_in_view_center(cursor, doc, scrolloff, false)
     }
 
     pub fn offset_coords_to_in_view_center(
         &self,
+        cursor: usize,
         doc: &Document,
         scrolloff: usize,
         centering: bool,
     ) -> Option<(usize, usize)> {
-        let cursor = doc
-            .selection(self.id)
-            .primary()
-            .cursor(doc.text().slice(..));
-
         let Position { col, row: line } =
             visual_coords_at_pos(doc.text().slice(..), cursor, doc.tab_width());
 
@@ -237,14 +234,25 @@ impl View {
     }
 
     pub fn ensure_cursor_in_view(&mut self, doc: &Document, scrolloff: usize) {
-        if let Some((row, col)) = self.offset_coords_to_in_view_center(doc, scrolloff, false) {
+        let cursor = doc
+            .selection(self.id)
+            .primary()
+            .cursor(doc.text().slice(..));
+        if let Some((row, col)) =
+            self.offset_coords_to_in_view_center(cursor, doc, scrolloff, false)
+        {
             self.offset.row = row;
             self.offset.col = col;
         }
     }
 
     pub fn ensure_cursor_in_view_center(&mut self, doc: &Document, scrolloff: usize) {
-        if let Some((row, col)) = self.offset_coords_to_in_view_center(doc, scrolloff, true) {
+        let cursor = doc
+            .selection(self.id)
+            .primary()
+            .cursor(doc.text().slice(..));
+        if let Some((row, col)) = self.offset_coords_to_in_view_center(cursor, doc, scrolloff, true)
+        {
             self.offset.row = row;
             self.offset.col = col;
         } else {
@@ -252,8 +260,9 @@ impl View {
         }
     }
 
-    pub fn is_cursor_in_view(&mut self, doc: &Document, scrolloff: usize) -> bool {
-        self.offset_coords_to_in_view(doc, scrolloff).is_none()
+    pub fn is_cursor_in_view(&mut self, cursor: usize, doc: &Document, scrolloff: usize) -> bool {
+        self.offset_coords_to_in_view(cursor, doc, scrolloff)
+            .is_none()
     }
 
     /// Calculates the last visible line on screen

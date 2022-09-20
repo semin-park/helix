@@ -487,24 +487,24 @@ impl EditorView {
         // It's slightly more efficient to produce a full RopeSlice from the Rope, then slice that a bunch
         // of times than it is to always call Rope::slice/get_slice (it will internally always hit RSEnum::Light).
         let text = text.slice(..);
-        let out_of_bounds = |visual_x: u16| {
-            visual_x < offset.col as u16 || visual_x >= viewport.width + offset.col as u16
+        let out_of_bounds = |visual_x: usize| {
+            visual_x < offset.col || visual_x >= viewport.width as usize + offset.col
         };
 
         let render_annotation =
-            |annot: &TextAnnotation, line: u16, pos: u16, surface: &mut Surface| {
+            |annot: &TextAnnotation, line: u16, pos: usize, surface: &mut Surface| {
                 let mut visual_x = pos;
                 for grapheme in annot.text.graphemes(true) {
                     if out_of_bounds(visual_x) {
                         break;
                     }
                     surface.set_string(
-                        viewport.x + visual_x - offset.col as u16,
+                        viewport.x + visual_x as u16 - offset.col as u16,
                         viewport.y + line,
                         grapheme,
                         annot.style,
                     );
-                    visual_x = visual_x.saturating_add(grapheme.width() as u16);
+                    visual_x = visual_x.saturating_add(grapheme.width());
                 }
             };
 
@@ -553,9 +553,6 @@ impl EditorView {
                     use helix_core::graphemes::{grapheme_width, RopeGraphemes};
 
                     for grapheme in RopeGraphemes::new(text) {
-                        let out_of_bounds = offset.col > visual_x
-                            || visual_x >= viewport.width as usize + offset.col;
-
                         if LineEnding::from_rope_slice(&grapheme).is_some() {
                             if !out_of_bounds(visual_x) {
                                 // we still want to render an empty cell with the style
@@ -659,7 +656,7 @@ impl EditorView {
         for annot in &text_annotations {
             if let TextAnnotationKind::Overlay(visual_x) = annot.kind {
                 let line = (annot.line - offset.row) as u16;
-                render_annotation(annot, line, visual_x as u16, surface);
+                render_annotation(annot, line, visual_x, surface);
             }
         }
     }
