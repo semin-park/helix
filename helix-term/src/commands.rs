@@ -5230,8 +5230,12 @@ fn jump_mode_word(cx: &mut Context) {
         // rather than in between them.
         let next = movement::move_prev_word_start(text, next, 1);
         let cursor_pos = next.cursor(text);
-        if !view.is_cursor_in_view(cursor_pos, doc, 0) {
+        let row = visual_coords_at_pos(doc.text().slice(..), cursor_pos, doc.tab_width()).row;
+        if row >= view.offset.row + view.inner_area().height as usize {
             break;
+        }
+        if !view.is_cursor_in_view(cursor_pos, doc, 0) {
+            continue;
         }
         // Avoid adjacent jump locations
         if fwd_jump_locations
@@ -5248,8 +5252,15 @@ fn jump_mode_word(cx: &mut Context) {
     for n in 1.. {
         let next = movement::move_prev_word_start(text, range, n);
         let cursor_pos = next.cursor(text);
-        if !view.is_cursor_in_view(cursor_pos, doc, 0) {
+        let row = visual_coords_at_pos(doc.text().slice(..), cursor_pos, doc.tab_width()).row;
+        if row < view.offset.row {
             break;
+        }
+        if !view.is_cursor_in_view(cursor_pos, doc, 0) {
+            if cursor_pos == 0 {
+                break;
+            }
+            continue;
         }
         if bck_jump_locations
             .last()
@@ -5294,7 +5305,14 @@ fn jump_mode_search_impl(cx: &mut Context, extend: bool) {
         for n in 1.. {
             let next = search::find_nth_next(text, c, cursor + 1, n);
             match next {
-                Some(pos) if view.is_cursor_in_view(pos, doc, 0) => {
+                Some(pos) => {
+                    let row = visual_coords_at_pos(doc.text().slice(..), pos, doc.tab_width()).row;
+                    if row >= view.offset.row + view.inner_area().height as usize {
+                        break;
+                    }
+                    if !view.is_cursor_in_view(pos, doc, 0) {
+                        continue;
+                    }
                     fwd_jump_locations.push((pos, if extend { anchor } else { pos }));
                 }
                 _ => break,
@@ -5304,7 +5322,14 @@ fn jump_mode_search_impl(cx: &mut Context, extend: bool) {
         for n in 1.. {
             let next = search::find_nth_prev(text, c, cursor, n);
             match next {
-                Some(pos) if view.is_cursor_in_view(pos, doc, 0) => {
+                Some(pos) => {
+                    let row = visual_coords_at_pos(doc.text().slice(..), pos, doc.tab_width()).row;
+                    if row < view.offset.row {
+                        break;
+                    }
+                    if !view.is_cursor_in_view(pos, doc, 0) {
+                        continue;
+                    }
                     bck_jump_locations.push((pos, if extend { anchor } else { pos }));
                 }
                 _ => break,
