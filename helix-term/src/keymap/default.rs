@@ -55,8 +55,8 @@ pub fn default() -> HashMap<Mode, Keymap> {
             "n" => goto_next_buffer,
             "p" => goto_previous_buffer,
             "." => goto_last_modification,
-            "j" => jump_mode_word,
-            "J" => jump_mode_search,
+            "j" => jump_to_identifier_label,
+            "J" => jump_to_char_label,
         },
         ":" => command_mode,
 
@@ -346,7 +346,8 @@ pub fn default() -> HashMap<Mode, Keymap> {
         "esc" => exit_select_mode,
 
         "g" => { "Goto"
-            "J" => extend_jump_mode_search,
+            "j" => jump_to_identifier_label_and_extend_selection,
+            "J" => jump_to_char_label_and_extend_selection,
         },
 
         "v" => normal_mode,

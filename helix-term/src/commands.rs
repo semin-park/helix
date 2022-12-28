@@ -1,4 +1,5 @@
 pub(crate) mod dap;
+pub(crate) mod jump;
 pub(crate) mod lsp;
 pub(crate) mod typed;
 
@@ -45,6 +46,10 @@ use fuzzy_matcher::FuzzyMatcher;
 use insert::*;
 use movement::Movement;
 
+use self::jump::{
+    apply_dimming, clear_dimming, find_all_char_occurrences, find_all_identifiers_in_view,
+    show_key_annotations_with_callback, sort_jump_targets, JumpSequencer, TrieNode, JUMP_KEYS,
+};
 use crate::{
     args,
     compositor::{self, Component, Compositor},
@@ -55,7 +60,7 @@ use crate::{
 
 use crate::job::{self, Jobs};
 use futures_util::StreamExt;
-use std::{collections::HashMap, fmt, future::Future};
+use std::{cmp::Ordering, collections::HashMap, fmt, future::Future};
 use std::{collections::HashSet, num::NonZeroUsize};
 
 use std::{
@@ -444,9 +449,10 @@ impl MappableCommand {
         decrement, "Decrement item under cursor",
         record_macro, "Record macro",
         replay_macro, "Replay macro",
-        jump_mode_word, "Jump mode: word-wise",
-        jump_mode_search, "Jump mode: character search",
-        extend_jump_mode_search, "Jump mode: extending character search",
+        jump_to_identifier_label, "Jump mode: word-wise",
+        jump_to_char_label, "Jump mode: character search",
+        jump_to_identifier_label_and_extend_selection, "Jump mode: extend selection with word-wise jump",
+        jump_to_char_label_and_extend_selection, "Jump mode: extend selection with character search",
         command_palette, "Open command palette",
     );
 }
@@ -5213,314 +5219,153 @@ fn replay_macro(cx: &mut Context) {
     }));
 }
 
-fn jump_mode_word(cx: &mut Context) {
-    let (view, doc) = current!(cx.editor);
-
-    let text = doc.text().slice(..);
-    let range = doc.selection(view.id).primary();
-
-    let mut forward_jump_locations = Vec::new();
-    for n in 1.. {
-        let next = movement::move_next_word_start(text, range, n);
-        // Check that the cursor is within the file before attempting further operations.
-        if next.cursor(text) >= text.len_chars() {
-            break;
-        }
-        // Use a `b` operation to position the cursor at the first character of words,
-        // rather than in between them.
-        let next = movement::move_prev_word_start(text, next, 1);
-        let cursor_pos = next.cursor(text);
-        let row = visual_coords_at_pos(doc.text().slice(..), cursor_pos, doc.tab_width()).row;
-        if row >= view.offset.row + view.inner_area().height as usize {
-            break;
-        }
-        if !view.is_cursor_in_view(cursor_pos, doc, 0) {
-            continue;
-        }
-        // Avoid adjacent jump locations
-        if forward_jump_locations
-            .last()
-            .map(|(pos, _)| cursor_pos - pos <= 1)
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        forward_jump_locations.push((cursor_pos, next.anchor));
-    }
-
-    let mut backward_jump_locations = Vec::new();
-    for n in 1.. {
-        let next = movement::move_prev_word_start(text, range, n);
-        let cursor_pos = next.cursor(text);
-        let row = visual_coords_at_pos(doc.text().slice(..), cursor_pos, doc.tab_width()).row;
-        if row < view.offset.row {
-            break;
-        }
-        if !view.is_cursor_in_view(cursor_pos, doc, 0) {
-            if cursor_pos == 0 {
-                break;
-            }
-            continue;
-        }
-        if backward_jump_locations
-            .last()
-            .map(|(pos, _)| pos - cursor_pos <= 1)
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        backward_jump_locations.push((cursor_pos, next.anchor));
-        if cursor_pos == 0 {
-            break;
-        }
-    }
-
-    jump_mode_impl(cx, forward_jump_locations, backward_jump_locations);
+fn jump_to_identifier_label(cx: &mut Context) {
+    let jump_targets = find_all_identifiers_in_view(cx);
+    jump_with_targets(cx, jump_targets, false);
 }
 
-fn jump_mode_search(cx: &mut Context) {
-    jump_mode_search_impl(cx, false);
+fn jump_to_identifier_label_and_extend_selection(cx: &mut Context) {
+    let jump_targets = find_all_identifiers_in_view(cx);
+    jump_with_targets(cx, jump_targets, true);
 }
 
-fn extend_jump_mode_search(cx: &mut Context) {
-    jump_mode_search_impl(cx, true);
+fn jump_to_char_label(cx: &mut Context) {
+    jump_with_char_input(cx, false);
 }
 
-fn jump_mode_search_impl(cx: &mut Context, extend: bool) {
+fn jump_to_char_label_and_extend_selection(cx: &mut Context) {
+    jump_with_char_input(cx, true);
+}
+
+fn jump_with_char_input(cx: &mut Context, extend_selection: bool) {
+    apply_dimming(cx);
+    cx.editor.set_status("Press a key:");
     cx.on_next_key(move |cx, event| {
-        let c = match event.char() {
-            Some(c) => c,
-            _ => return,
+        let key = match event.char() {
+            Some(key) => key,
+            _ => return clear_dimming(cx),
         };
-
-        let (view, doc) = current!(cx.editor);
-
-        let text = doc.text().slice(..);
-        let (cursor, anchor) = {
-            let range = doc.selection(view.id).primary();
-            (range.cursor(text), range.anchor)
-        };
-
-        let mut forward_jump_locations = Vec::new();
-        for n in 1.. {
-            let next = search::find_nth_next(text, c, cursor + 1, n);
-            match next {
-                Some(pos) => {
-                    let row = visual_coords_at_pos(doc.text().slice(..), pos, doc.tab_width()).row;
-                    if row >= view.offset.row + view.inner_area().height as usize {
-                        break;
-                    }
-                    if !view.is_cursor_in_view(pos, doc, 0) {
-                        continue;
-                    }
-                    forward_jump_locations.push((pos, if extend { anchor } else { pos }));
-                }
-                _ => break,
-            }
+        if !key.is_ascii() {
+            return clear_dimming(cx);
         }
-        let mut backward_jump_locations = Vec::new();
-        for n in 1.. {
-            let next = search::find_nth_prev(text, c, cursor, n);
-            match next {
-                Some(pos) => {
-                    let row = visual_coords_at_pos(doc.text().slice(..), pos, doc.tab_width()).row;
-                    if row < view.offset.row {
-                        break;
-                    }
-                    if !view.is_cursor_in_view(pos, doc, 0) {
-                        continue;
-                    }
-                    backward_jump_locations.push((pos, if extend { anchor } else { pos }));
-                }
-                _ => break,
-            }
-        }
-
-        jump_mode_impl(cx, forward_jump_locations, backward_jump_locations);
+        let jump_targets = find_all_char_occurrences(cx, key as u8);
+        jump_with_targets(cx, jump_targets, extend_selection);
     });
 }
 
-fn jump_mode_impl(
-    cx: &mut Context,
-    forward_jumps: Vec<(usize, usize)>,
-    backward_jumps: Vec<(usize, usize)>,
+fn fix_extend_mode_off_by_one(selection: &Range, target: &mut Range) {
+    // Non-zero width ranges are always inclusive on the left and exclusive on
+    // the right. But when we're extending the selection, this often creates
+    // off-by-one behavior, where the cursor doesn't quite reach the target.
+    // Thus we need to increment the upper bound when the target head is after
+    // the current anchor.
+    if selection.anchor < target.head {
+        match target.anchor.cmp(&target.head) {
+            Ordering::Less => target.head += 1,
+            Ordering::Greater => target.anchor += 1,
+            Ordering::Equal => {}
+        };
+    }
+}
+
+fn jump_to(ctx: &mut Context, mut range: Range, extend_selection: bool) {
+    let (view, doc) = current!(ctx.editor);
+    push_jump(view, doc);
+    let selection = doc.selection(view.id).primary();
+    if extend_selection {
+        fix_extend_mode_off_by_one(&selection, &mut range);
+    }
+    doc.set_selection(view.id, Selection::single(range.anchor, range.head));
+}
+
+/// Handle user key press.
+/// Returns whether we are finished and should move out of jump mode.
+fn handle_key(
+    mut sequencer: impl JumpSequencer + 'static,
+    ctx: &mut Context,
+    key: u8,
+    extend_selection: bool,
+) -> bool {
+    clear_dimming(ctx);
+    match sequencer.choose(key) {
+        Some(subnode) => {
+            sequencer = *subnode;
+        }
+        // char `c` is not a valid character. Finish jump mode
+        None => return true,
+    }
+    match sequencer.try_get_range() {
+        Some(range) => {
+            jump_to(ctx, range, extend_selection);
+            return true;
+        }
+        None => {
+            show_key_annotations_with_callback(ctx, sequencer.generate(), move |ctx, event| {
+                handle_key_event(sequencer, ctx, event, extend_selection)
+            });
+        }
+    }
+    false
+}
+
+fn handle_key_event(
+    node: impl JumpSequencer + 'static,
+    ctx: &mut Context,
+    event: KeyEvent,
+    extend_selection: bool,
 ) {
-    const JUMP_KEYS: &[u8] = b"asdghklqwertyuiopzxcvbnmfj;";
-
-    let jump_locations = forward_jumps
-        .into_iter()
-        .map(Some)
-        .chain(std::iter::repeat(None))
-        .zip(
-            backward_jumps
-                .into_iter()
-                .map(Some)
-                .chain(std::iter::repeat(None)),
-        )
-        .take_while(|tup| *tup != (None, None))
-        .flat_map(|(fwd, bck)| [fwd, bck])
-        .flatten()
-        .collect::<Vec<_>>();
-
-    if jump_locations.is_empty() {
-        return;
-    }
-
-    // Optimize the quantity of keys to use for multikey jumps to maximize the
-    // number of jumps accessible within one keystroke without compromising on
-    // making enough jumps accessible within two keystrokes.
-    let sep_idx = JUMP_KEYS.len() - {
-        let k = JUMP_KEYS.len() as f32;
-        // Clamp input to the domain (0, (k^2 + 2k + 1) / 4].
-        let n = (jump_locations.len() as f32).min((k.powi(2) + 2.0 * k + 1.0) / 4.0);
-        // Within the domain (0, (k^2 + 2k + 1) / 4], this function returns values
-        // in the range (-1, k/2]. As such, when `.ceil()` is called on the output,
-        // the result is in the range [0, k/2].
-        ((k - 1.0 - (k.powi(2) + 2.0 * k - 4.0 * n + 1.0).sqrt()) / 2.0).ceil() as usize
-    };
-
-    enum Jump {
-        Final(usize, usize),
-        Multi(HashMap<u8, Jump>),
-    }
-
-    let mut jump_seqs = JUMP_KEYS[..sep_idx]
-        .iter()
-        .copied()
-        .map(|b| vec![b])
-        .collect::<Vec<_>>();
-    loop {
-        if jump_seqs.len() >= jump_locations.len() {
-            break;
-        }
-        let last_len = jump_seqs.last().map(|seq| seq.len()).unwrap_or(1);
-        let mut seq_iter = jump_seqs
-            .iter()
-            .zip((1..=jump_seqs.len()).rev())
-            .skip_while(|(seq, _)| seq.len() < last_len)
-            .map(|(seq, len)| (seq.clone(), len))
-            .peekable();
-        let subset_len = seq_iter.peek().map(|(_, len)| *len).unwrap_or(1);
-        let mut new_seqs = std::iter::repeat(seq_iter.map(|(seq, _)| seq))
-            .take(
-                // Add 1 less than the divisor to essentially ceil the integer division.
-                (jump_locations.len().saturating_sub(jump_seqs.len()) + subset_len - 1)
-                    / subset_len,
-            )
-            .zip(JUMP_KEYS[sep_idx..].iter().copied())
-            .flat_map(|(iter, k)| {
-                iter.map(move |mut seq| {
-                    seq.insert(0, k);
-                    seq
-                })
-            })
-            .collect();
-        jump_seqs.append(&mut new_seqs);
-    }
-
-    let mut jumps = HashMap::new();
-    for (seq, pos) in jump_seqs.into_iter().zip(jump_locations) {
-        let mut current = &mut jumps;
-        for &k in &seq[..seq.len() - 1] {
-            current = match current
-                .entry(k)
-                .or_insert_with(|| Jump::Multi(HashMap::new()))
-            {
-                Jump::Multi(map) => map,
-                _ => unreachable!(),
-            };
-        }
-        current.insert(*seq.last().unwrap(), Jump::Final(pos.0, pos.1));
-    }
-
-    use helix_view::decorations::{TextAnnotation, TextAnnotationKind};
-    use helix_view::graphics::{Color, Modifier, Style};
-
-    fn annotations_impl(label: u8, jump: &Jump) -> Box<dyn Iterator<Item = (String, usize)> + '_> {
-        match jump {
-            Jump::Final(pos, _) => Box::new(std::iter::once(((label as char).into(), *pos))),
-            Jump::Multi(map) => Box::new(
-                map.iter()
-                    .flat_map(|(&label, jump)| annotations_impl(label, jump))
-                    .map(move |(mut label_, jump)| {
-                        (
-                            {
-                                label_.insert(0, label as char);
-                                label_
-                            },
-                            jump,
-                        )
-                    }),
-            ),
-        }
-    }
-    fn annotations(
-        doc: &Document,
-        theme: &helix_view::Theme,
-        jumps: &HashMap<u8, Jump>,
-    ) -> impl Iterator<Item = TextAnnotation> {
-        let single_style = theme
-            .try_get("ui.jump.single")
-            .unwrap_or_else(|| Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
-        let multi_style = theme.try_get("ui.jump.multi").unwrap_or_else(|| {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        });
-        jumps
-            .iter()
-            .flat_map(|(&label, jump)| annotations_impl(label, jump))
-            .map(|(annot, pos)| {
-                let text = doc.text();
-                let line = text.char_to_line(pos);
-                let offset = pos - text.line_to_char(line);
-                let style = match annot.len() {
-                    2.. => multi_style,
-                    _ => single_style,
-                };
-                TextAnnotation {
-                    text: annot.into(),
-                    style,
-                    line,
-                    kind: TextAnnotationKind::Overlay(offset),
-                }
-            })
-            // Collect to satisfy 'static lifetime.
-            .collect::<Vec<_>>()
-            .into_iter()
-    }
-
-    let doc = doc_mut!(cx.editor);
-
-    let annots = annotations(doc, &cx.editor.theme, &jumps);
-    doc.push_text_annotations("jump_mode", annots);
-
-    fn handle_key(mut jumps: HashMap<u8, Jump>, cx: &mut Context, event: KeyEvent) {
-        let doc = doc_mut!(cx.editor);
-        doc.clear_text_annotations("jump_mode");
-        if let Some(jump) = event
-            .char()
-            .and_then(|c| c.try_into().ok())
-            .and_then(|c| jumps.remove(&c))
-        {
-            match jump {
-                Jump::Multi(jumps) => {
-                    let annots = annotations(doc, &cx.editor.theme, &jumps);
-                    doc.push_text_annotations("jump_mode", annots);
-                    cx.on_next_key(move |cx, event| handle_key(jumps, cx, event));
-                }
-                Jump::Final(mut cursor, anchor) => {
-                    let (view, doc) = current!(cx.editor);
-                    push_jump(view, doc);
-                    // Fixes off-by-one errors when extending with jump mode
-                    if cursor >= anchor {
-                        cursor += 1
-                    }
-                    doc.set_selection(view.id, Selection::single(anchor, cursor));
-                }
+    let finished = match event.char() {
+        Some(key) => {
+            if key.is_ascii() {
+                handle_key(node, ctx, key as u8, extend_selection)
+            } else {
+                // Only accept ascii characters. Finish jump mode.
+                true
             }
         }
+        // We didn't get a valid character. Finish jump mode.
+        None => true,
+    };
+    if finished {
+        clear_dimming(ctx);
     }
+}
 
-    cx.on_next_key(move |cx, event| handle_key(jumps, cx, event));
+fn extend_jump_selection(cx: &Context, jump_targets: Vec<Range>) -> Vec<Range> {
+    let (view, doc) = current_ref!(cx.editor);
+    // We only care about the primary selection
+    let mut cur = doc.selection(view.id).primary();
+    jump_targets
+        .into_iter()
+        .map(|mut range| {
+            // We want to grow the selection, so if the new head crosses the
+            // old anchor, swap the old head and old anchor
+            let cross_fwd = cur.head < cur.anchor && cur.anchor < range.head;
+            let cross_bwd = range.head < cur.anchor && cur.anchor < cur.head;
+            if cross_fwd || cross_bwd {
+                std::mem::swap(&mut cur.head, &mut cur.anchor);
+            }
+            range.anchor = cur.anchor;
+            range
+        })
+        .collect()
+}
+
+fn jump_with_targets(ctx: &mut Context, mut jump_targets: Vec<Range>, extend_selection: bool) {
+    if jump_targets.is_empty() {
+        return clear_dimming(ctx);
+    }
+    // Jump targets are sorted based on their distance to the current cursor.
+    jump_targets = sort_jump_targets(ctx, jump_targets);
+    if extend_selection {
+        jump_targets = extend_jump_selection(ctx, jump_targets);
+    }
+    if jump_targets.len() == 1 {
+        jump_to(ctx, jump_targets[0], extend_selection);
+        return clear_dimming(ctx);
+    }
+    let root = TrieNode::build(JUMP_KEYS, jump_targets);
+    show_key_annotations_with_callback(ctx, root.generate(), move |ctx, event| {
+        handle_key_event(root, ctx, event, extend_selection)
+    });
 }
