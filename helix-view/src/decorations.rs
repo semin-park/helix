@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::graphics::Style;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TextAnnotationKind {
     /// Add to end of line
     Eol,
@@ -24,6 +24,7 @@ impl TextAnnotationKind {
 /// Namespaces and identifes similar annotations
 pub type TextAnnotationGroup = &'static str;
 
+#[derive(Debug)]
 pub struct TextAnnotation {
     pub text: Cow<'static, str>,
     pub style: Style,
