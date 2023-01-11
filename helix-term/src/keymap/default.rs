@@ -57,6 +57,8 @@ pub fn default() -> HashMap<Mode, Keymap> {
             "k" => move_line_up,
             "j" => move_line_down,
             "." => goto_last_modification,
+            "w" => jump_to_identifier_label,
+            "/" => jump_to_char_label,
         },
         ":" => command_mode,
 
@@ -344,6 +346,11 @@ pub fn default() -> HashMap<Mode, Keymap> {
         "home" => extend_to_line_start,
         "end" => extend_to_line_end,
         "esc" => exit_select_mode,
+
+        "g" => { "Goto"
+            "w" => jump_to_identifier_label_and_extend_selection,
+            "/" => jump_to_char_label_and_extend_selection,
+        },
 
         "v" => normal_mode,
     }));

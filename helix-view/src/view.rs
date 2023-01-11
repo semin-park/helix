@@ -2,7 +2,10 @@ use crate::{
     align_view, editor::GutterType, graphics::Rect, Align, Document, DocumentId, Theme, ViewId,
 };
 use helix_core::{
-    char_idx_at_visual_offset, doc_formatter::TextFormat, text_annotations::TextAnnotations,
+    char_idx_at_visual_offset,
+    doc_formatter::TextFormat,
+    syntax::Highlight,
+    text_annotations::{Overlay, TextAnnotations},
     visual_offset_from_anchor, visual_offset_from_block, Position, RopeSlice, Selection,
     Transaction,
 };
@@ -10,6 +13,7 @@ use helix_core::{
 use std::{
     collections::{HashMap, VecDeque},
     fmt,
+    rc::Rc,
 };
 
 const JUMP_LIST_CAPACITY: usize = 30;
@@ -121,6 +125,14 @@ pub struct View {
     /// mapping keeps track of the last applied history revision so that only new changes
     /// are applied.
     doc_revisions: HashMap<DocumentId, usize>,
+    // `visual_jump_labels` are annotated overlay texts that the user can type, to move the cursor
+    // to the annotated location. It's a single array from logical standpoint, but it's split into
+    // three arrays such that each array corresponds to one highlight. The first array contains
+    // single character jump labels. The second and third arrays collectively represent multi-char
+    // jump labels, but the second one contains the leading (first) character, whereas the third
+    // array contains the remaining characters. The purpose of this is such that the leading
+    // character can be painted differently from the remaining characters.
+    pub visual_jump_labels: [Rc<[Overlay]>; 3],
 }
 
 impl fmt::Debug for View {
@@ -150,6 +162,7 @@ impl View {
             object_selections: Vec::new(),
             gutters: gutter_types,
             doc_revisions: HashMap::new(),
+            visual_jump_labels: [Rc::new([]), Rc::new([]), Rc::new([])],
         }
     }
 
@@ -410,8 +423,32 @@ impl View {
     }
 
     pub fn text_annotations(&self, doc: &Document, theme: Option<&Theme>) -> TextAnnotations {
-        // TODO custom annotations for custom views like side by side diffs
-        doc.text_annotations(theme)
+        let mut text_annot = doc.text_annotations(theme);
+        let try_get_highlight =
+            |scope: &str| theme.and_then(|theme| Some(Highlight(theme.find_scope_index(scope)?)));
+        // Overlays are added from lowest priority to highest, such that higher priority
+        // overlays can overwrite the lower ones.
+        if !self.visual_jump_labels[2].is_empty() {
+            text_annot.add_overlay(
+                self.visual_jump_labels[2].clone(),
+                try_get_highlight("ui.virtual.jump.multi.rest"),
+            );
+        }
+        if !self.visual_jump_labels[1].is_empty() {
+            text_annot.add_overlay(
+                self.visual_jump_labels[1].clone(),
+                try_get_highlight("ui.virtual.jump.multi.first"),
+            );
+        }
+        if !self.visual_jump_labels[0].is_empty() {
+            text_annot.add_overlay(
+                self.visual_jump_labels[0].clone(),
+                try_get_highlight("ui.virtual.jump.single"),
+            );
+        }
+        text_annot.reset_pos(self.offset.anchor);
+        log::error!("text_annot: {:?}", text_annot);
+        text_annot
     }
 
     pub fn text_pos_at_screen_coords(
