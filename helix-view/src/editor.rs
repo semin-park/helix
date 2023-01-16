@@ -291,6 +291,7 @@ pub struct Config {
     pub insert_final_newline: bool,
     /// Enables smart tab
     pub smart_tab: Option<SmartTabConfig>,
+    pub jump_mode: JumpModeConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Eq, PartialOrd, Ord)]
@@ -305,6 +306,24 @@ impl Default for SmartTabConfig {
         SmartTabConfig {
             enable: true,
             supersede_menu: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case", deny_unknown_fields)]
+pub struct JumpModeConfig {
+    /// Whether or not to dim the view when in jump mode. Defaults to `true`.
+    pub dim_during_jump: bool,
+    /// How many characters the user should type before labelling the targets.
+    pub num_chars_before_label: u8,
+}
+
+impl Default for JumpModeConfig {
+    fn default() -> Self {
+        JumpModeConfig {
+            dim_during_jump: true,
+            num_chars_before_label: 1,
         }
     }
 }
@@ -846,6 +865,7 @@ impl Default for Config {
             default_line_ending: LineEndingConfig::default(),
             insert_final_newline: true,
             smart_tab: Some(SmartTabConfig::default()),
+            jump_mode: JumpModeConfig::default(),
         }
     }
 }
