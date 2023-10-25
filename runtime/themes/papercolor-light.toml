@@ -9,6 +9,10 @@
 "ui.selection" = { bg = "selection_secondary_bg", fg = "selection_secondary_fg" }
 "ui.selection.primary" = { bg = "selection_bg", fg = "selection_fg" }
 "ui.highlight" = { bg = "cursorline_bg" }
+"ui.virtual.jump.single" = { fg = "#ff007c", modifiers = ["bold"] }
+"ui.virtual.jump.multi.first" = { fg = "#00dfff", modifiers = ["bold"] }
+"ui.virtual.jump.multi.rest" = "#2b8db3"
+"ui.virtual.jump.dim" = "#666666"
 
 "ui.cursorline" = { bg = "cursorline_bg" }
 "ui.cursorline.secondary" = { bg = "cursorline_secondary_bg" }
